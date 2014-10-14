@@ -22,7 +22,6 @@
 #include <linux/iommu.h>
 #include <linux/io.h>
 #include <linux/vmalloc.h>
-#include <linux/sizes.h>
 
 #define NO_KERNEL_MAPPING_DUMMY	0x2222
 
