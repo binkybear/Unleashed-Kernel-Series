@@ -71,7 +71,6 @@ extern void __flush_dcache_page(struct address_space *mapping, struct page *page
 extern phys_addr_t arm_dma_limit;
 extern unsigned long arm_dma_pfn_limit;
 #else
-#define arm_dma_limit ((u32)~0)
 #define arm_dma_limit ((phys_addr_t)~0)
 #define arm_dma_pfn_limit (~0ul >> PAGE_SHIFT)
 #endif
