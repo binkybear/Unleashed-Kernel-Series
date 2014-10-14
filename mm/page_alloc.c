@@ -57,6 +57,7 @@
 #include <linux/ftrace_event.h>
 #include <linux/memcontrol.h>
 #include <linux/prefetch.h>
+#include <linux/mm_inline.h>
 #include <linux/migrate.h>
 #include <linux/page-debug-flags.h>
 
@@ -203,7 +204,10 @@ static char * const zone_names[MAX_NR_ZONES] = {
  * allocations below this point, only high priority ones. Automatically
  * tuned according to the amount of memory in the system.
  */
-int min_free_kbytes = 1024;
+int min_free_kbytes = 5752;
+int wmark_min_kbytes = 5752;
+int wmark_low_kbytes = 7190;
+int wmark_high_kbytes = 8628;
 int min_free_order_shift = 1;
 
 /*
@@ -782,6 +786,14 @@ bool is_cma_pageblock(struct page *page)
 	return get_pageblock_migratetype(page) == MIGRATE_CMA;
 }
 
+#ifdef CONFIG_MACH_JF
+/*                                         
+                                                                                  
+                             
+ */
+EXPORT_SYMBOL(is_cma_pageblock);
+#endif
+
 /* Free whole pageblock and set it's migration type to MIGRATE_CMA. */
 void __init init_cma_reserved_pageblock(struct page *page)
 {
@@ -797,6 +809,10 @@ void __init init_cma_reserved_pageblock(struct page *page)
 	set_pageblock_migratetype(page, MIGRATE_CMA);
 	__free_pages(page, pageblock_order);
 	totalram_pages += pageblock_nr_pages;
+#ifdef CONFIG_HIGHMEM
+	if (PageHighMem(page))
+		totalhigh_pages += pageblock_nr_pages;
+#endif
 }
 #endif
 
@@ -1140,7 +1156,7 @@ static struct page *__rmqueue_cma(struct zone *zone, unsigned int order,
 #ifdef CONFIG_CMA
 	if (migratetype == MIGRATE_MOVABLE && !zone->cma_alloc)
 		page = __rmqueue_smallest(zone, order, MIGRATE_CMA);
-	else
+	if (!page)
 #endif
 retry_reserve :
 		page = __rmqueue_smallest(zone, order, migratetype);
@@ -1472,11 +1488,15 @@ int split_free_page(struct page *page)
 	order = page_order(page);
 	mt = get_pageblock_migratetype(page);
 
-	/* Obey watermarks as if the page was being allocated */
-	watermark = low_wmark_pages(zone) + (1 << order);
-	if (!is_migrate_cma(mt) && mt != MIGRATE_ISOLATE &&
-	    !zone_watermark_ok(zone, 0, watermark, 0, 0))
-		return 0;
+	if (mt != MIGRATE_ISOLATE) {
+		/* Obey watermarks as if the page was being allocated */
+		watermark = low_wmark_pages(zone) + (1 << order);
+		if (!is_migrate_cma(mt) &&
+		    !zone_watermark_ok(zone, 0, watermark, 0, 0))
+			return 0;
+
+		__mod_zone_freepage_state(zone, -(1UL << order), mt);
+	}
 
 	/* Remove page from free list */
 	list_del(&page->lru);
@@ -5179,8 +5199,75 @@ static void setup_per_zone_lowmem_reserve(void)
 		}
 	}
 
+	wmark_min_kbytes = min_free_kbytes;
+	wmark_low_kbytes = min_free_kbytes + (min_free_kbytes >> 2);
+	wmark_high_kbytes = min_free_kbytes + (min_free_kbytes >> 1);
+
 	/* update totalreserve_pages */
 	calculate_totalreserve_pages();
+}
+
+/**
+ * setup_per_zone_wmark - called when wmark_{min|low|high}_kbytes changes
+ *
+ * The watermark[min,low,high] values for each zone are set with respect
+ * to wmark_min_kbytes, wmark_low_kbytes and wmark_high_kbytes.
+ */
+void setup_per_zone_wmark(int wmark)
+{
+	unsigned long pages;
+	unsigned long lowmem_pages = 0;
+	struct zone *zone;
+	unsigned long flags;
+
+	switch (wmark) {
+	case WMARK_MIN:
+		pages = wmark_min_kbytes >> (PAGE_SHIFT - 10);
+		min_free_kbytes = wmark_min_kbytes;
+		break;
+	case WMARK_LOW:
+		pages = wmark_low_kbytes >> (PAGE_SHIFT - 10);
+		break;
+	case WMARK_HIGH:
+		pages = wmark_high_kbytes >> (PAGE_SHIFT - 10);
+		break;
+	default:
+		return;
+	}
+
+	/* Calculate total number of !ZONE_HIGHMEM pages */
+	for_each_zone(zone) {
+		if (!is_highmem(zone))
+			lowmem_pages += zone->present_pages;
+	}
+
+	for_each_zone(zone) {
+		u64 tmp;
+
+		spin_lock_irqsave(&zone->lock, flags);
+		tmp = (u64)pages * zone->present_pages;
+		do_div(tmp, lowmem_pages);
+
+		if (wmark == WMARK_MIN && is_highmem(zone)) {
+			int min_pages;
+
+			min_pages = zone->present_pages / 1024;
+			if (min_pages < SWAP_CLUSTER_MAX)
+				min_pages = SWAP_CLUSTER_MAX;
+			if (min_pages > 128)
+				min_pages = 128;
+			zone->watermark[wmark] = min_pages;
+		} else {
+			zone->watermark[wmark] = tmp;
+		}
+
+		if (wmark == WMARK_MIN)
+			setup_zone_migrate_reserve(zone);
+		spin_unlock_irqrestore(&zone->lock, flags);
+	}
+
+	if (wmark == WMARK_HIGH)
+		calculate_totalreserve_pages();
 }
 
 static void __setup_per_zone_wmarks(void)
@@ -5236,10 +5323,6 @@ static void __setup_per_zone_wmarks(void)
                                         low + (min >> 2);
                 zone->watermark[WMARK_HIGH] = min_wmark_pages(zone) +
                                         low + (min >> 1);
-
-		zone->watermark[WMARK_MIN] += cma_wmark_pages(zone);
-		zone->watermark[WMARK_LOW] += cma_wmark_pages(zone);
-		zone->watermark[WMARK_HIGH] += cma_wmark_pages(zone);
 
 		setup_zone_migrate_reserve(zone);
 		spin_unlock_irqrestore(&zone->lock, flags);
@@ -5361,6 +5444,45 @@ int min_free_kbytes_sysctl_handler(ctl_table *table, int write,
 	if (write)
 		setup_per_zone_wmarks();
 	return 0;
+}
+
+int wmark_min_kbytes_sysctl_handler(ctl_table *table, int write,
+	void __user *buffer, size_t *length, loff_t *ppos)
+{
+	int ret;
+
+	ret = proc_dointvec_minmax(table, write, buffer, length, ppos);
+	if (ret < 0 || !write)
+		return ret;
+
+	setup_per_zone_wmark(WMARK_MIN);
+	return ret;
+}
+
+int wmark_low_kbytes_sysctl_handler(ctl_table *table, int write,
+	void __user *buffer, size_t *length, loff_t *ppos)
+{
+	int ret;
+
+	ret = proc_dointvec_minmax(table, write, buffer, length, ppos);
+	if (ret < 0 || !write)
+		return ret;
+
+	setup_per_zone_wmark(WMARK_LOW);
+	return ret;
+}
+
+int wmark_high_kbytes_sysctl_handler(ctl_table *table, int write,
+	void __user *buffer, size_t *length, loff_t *ppos)
+{
+	int ret;
+
+	ret = proc_dointvec_minmax(table, write, buffer, length, ppos);
+	if (ret < 0 || !write)
+		return ret;
+
+	setup_per_zone_wmark(WMARK_HIGH);
+	return ret;
 }
 
 #ifdef CONFIG_NUMA
@@ -5861,54 +5983,6 @@ static int __alloc_contig_migrate_range(unsigned long start, unsigned long end)
 	return ret > 0 ? 0 : ret;
 }
 
-/*
- * Update zone's cma pages counter used for watermark level calculation.
- */
-static inline void __update_cma_watermarks(struct zone *zone, int count)
-{
-	unsigned long flags;
-	spin_lock_irqsave(&zone->lock, flags);
-	zone->min_cma_pages += count;
-	spin_unlock_irqrestore(&zone->lock, flags);
-	setup_per_zone_wmarks();
-}
-
-/*
- * Trigger memory pressure bump to reclaim some pages in order to be able to
- * allocate 'count' pages in single page units. Does similar work as
- *__alloc_pages_slowpath() function.
- */
-static int __reclaim_pages(struct zone *zone, gfp_t gfp_mask, int count)
-{
-	enum zone_type high_zoneidx = gfp_zone(gfp_mask);
-	struct zonelist *zonelist = node_zonelist(0, gfp_mask);
-	int did_some_progress = 0;
-	int order = 1;
-
-	/*
-	 * Increase level of watermarks to force kswapd do his job
-	 * to stabilise at new watermark level.
-	 */
-	__update_cma_watermarks(zone, count);
-
-	/* Obey watermarks as if the page was being allocated */
-	while (!zone_watermark_ok(zone, 0, low_wmark_pages(zone), 0, 0)) {
-		wake_all_kswapd(order, zonelist, high_zoneidx, zone_idx(zone));
-
-		did_some_progress = __perform_reclaim(gfp_mask, order, zonelist,
-						      NULL);
-		if (!did_some_progress) {
-			/* Exhausted what can be done so it's blamo time */
-			out_of_memory(zonelist, gfp_mask, order, NULL, false);
-		}
-	}
-
-	/* Restore original watermark levels. */
-	__update_cma_watermarks(zone, -count);
-
-	return count;
-}
-
 /**
  * alloc_contig_range() -- tries to allocate given range of pages
  * @start:	start PFN to allocate
@@ -6009,11 +6083,6 @@ int alloc_contig_range(unsigned long start, unsigned long end,
 		goto done;
 	}
 
-	/*
-	 * Reclaim enough pages to make sure that contiguous allocation
-	 * will not starve the system.
-	 */
-	__reclaim_pages(zone, GFP_HIGHUSER_MOVABLE, end-start);
 
 	/* Grab isolated pages from freelists. */
 	outer_end = isolate_freepages_range(outer_start, end);
