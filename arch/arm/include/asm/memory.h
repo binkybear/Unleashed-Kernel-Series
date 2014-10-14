@@ -284,14 +284,6 @@ static inline __deprecated void *bus_to_virt(unsigned long x)
 					&& pfn_valid(__pa(kaddr) >> PAGE_SHIFT) )
 
 /*
- * Optional coherency support.  Currently used only by selected
- * Intel XSC3-based systems.
- */
-#ifndef arch_is_coherent
-#define arch_is_coherent()		0
-#endif
-
-/*
  * Set if the architecture speculatively fetches data into cache.
  */
 #ifndef arch_has_speculative_dfetch
