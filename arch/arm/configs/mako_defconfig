@@ -2,7 +2,7 @@
 # Automatically generated file; DO NOT EDIT.
 # Linux/arm 3.4.104 Kernel Configuration
 #
-CONFIG_LOCALVERSION="-unleashed-90u-a6"
+CONFIG_LOCALVERSION="-unleashed-90u-a8"
 CONFIG_ARM=y
 CONFIG_ARM_HAS_SG_CHAIN=y
 CONFIG_MIGHT_HAVE_PCI=y
