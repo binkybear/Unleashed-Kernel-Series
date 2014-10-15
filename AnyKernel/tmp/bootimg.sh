@@ -17,7 +17,7 @@ else
 	echo "[AnyKernel] Unknown ramdisk format!" | tee /dev/kmsg
 	exit 1
 fi
-/tmp/mkbootimg --kernel /tmp/kernel/zImage --ramdisk $rdcomp --cmdline "$(cat /tmp/out/boot.img-cmdline)" --base $(cat /tmp/out/boot.img-base) --pagesize $(cat /tmp/out/boot.img-pagesize) --ramdisk_offset $(cat /tmp/out/boot.img-ramdisk_offset) --tags_offset $(cat /tmp/out/boot.img-tags_offset) -o /tmp/boot.img
+/tmp/mkbootimg --kernel /tmp/kernel --ramdisk $rdcomp --cmdline "$(cat /tmp/out/boot.img-cmdline)" --base $(cat /tmp/out/boot.img-base) --pagesize $(cat /tmp/out/boot.img-pagesize) --ramdisk_offset $(cat /tmp/out/boot.img-ramdisk_offset) --tags_offset $(cat /tmp/out/boot.img-tags_offset) -o /tmp/boot.img
 if [ -e /tmp/boot.img ]; then
 	echo "[AnyKernel] Boot.img created successfully!" | tee /dev/kmsg
 else
